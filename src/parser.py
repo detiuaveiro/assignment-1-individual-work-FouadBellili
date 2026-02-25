@@ -1,6 +1,7 @@
 from bs4 import BeautifulSoup
 import logging
 import pathlib
+import sqlite3
 
 BASE_DIR = pathlib.Path(__file__).parent.parent
 BRONZE_DIR = BASE_DIR / "data" / "bronze" / "ua_news"
@@ -36,3 +37,26 @@ for file in files:
         }
         seen_urls.add(source_url)
         data.append(c_data)
+
+conn = sqlite3.connect(BASE_DIR / "data" / "silver" / "ua_news.db")
+
+with conn:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS news (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT,
+            date TEXT,
+            description TEXT,
+            url TEXT UNIQUE
+        )
+    """)
+    for item in data:
+        try:
+            conn.execute("""
+                INSERT INTO news (title, date, description, url) 
+                VALUES (?, ?, ?, ?)
+            """, (item['title'], item['date'], item['description'], item['url']))
+        except sqlite3.IntegrityError:
+            logging.warning(f"Duplicate URL skipped: {item['url']}")
+
+conn.close()
