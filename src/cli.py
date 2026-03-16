@@ -4,7 +4,8 @@ cli.py — Command-line interface for the Grant Scraper pipeline.
 
 Usage:
     python cli.py scrape [--source ua|anr|all]
-    python cli.py search <term> [--source ua|anr] [--limit N]
+    python cli.py search <term> [--source ua|anr] [--field FIELD] [--type TYPE]
+                                [--from YYYY-MM-DD] [--until YYYY-MM-DD] [--limit N]
     python cli.py export [--format csv|json|both] [--output DIR]
     python cli.py stats
 """
@@ -21,10 +22,9 @@ from datetime import date, datetime
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-BASE_DIR   = pathlib.Path(__file__).parent.parent  # project root (one level above src/)
+BASE_DIR   = pathlib.Path(__file__).parent.parent
 DB_PATH    = BASE_DIR / "data" / "silver" / "jobs_and_news.db"
 EXPORT_DIR = BASE_DIR / "data" / "exports"
-
 
 
 def get_connection(db_path: pathlib.Path = DB_PATH) -> sqlite3.Connection:
@@ -41,29 +41,26 @@ def _rows_to_dicts(rows) -> list[dict]:
 
 
 def _print_table(rows: list[dict], columns: list[str], max_width: int = 40):
-    """Pretty-print rows as a table."""
     if not rows:
         print("  (no results)")
         return
-
-    col_widths = {c: max(len(c), max((len(str(r.get(c, "") or "")) for r in rows), default=0)) for c in columns}
+    col_widths = {c: max(len(c), max((len(str(r.get(c, "") or "")) for r in rows), default=0))
+                  for c in columns}
     col_widths = {c: min(w, max_width) for c, w in col_widths.items()}
-
-    header = "  ".join(c.upper().ljust(col_widths[c]) for c in columns)
+    header    = "  ".join(c.upper().ljust(col_widths[c]) for c in columns)
     separator = "  ".join("─" * col_widths[c] for c in columns)
     print(header)
     print(separator)
     for row in rows:
-        line = "  ".join(str(row.get(c, "") or "")[:col_widths[c]].ljust(col_widths[c]) for c in columns)
+        line = "  ".join(
+            str(row.get(c, "") or "")[:col_widths[c]].ljust(col_widths[c]) for c in columns
+        )
         print(line)
 
 
-
-
+# ── scrape ────────────────────────────────────────────────────────────────────
 def cmd_scrape(args):
-    """Run the full scrape → parse → analyze pipeline."""
     source = args.source.lower() if args.source else "all"
-
     print(f"\n Starting scrape (source={source}) …\n")
 
     try:
@@ -89,7 +86,7 @@ def cmd_scrape(args):
         logger.error(f"Could not import parser: {e}")
         sys.exit(1)
 
-    print("\n Analyzing text (deadlines, amounts, contacts) …\n")
+    print("\n Analyzing text (deadlines, amounts, contacts, categories) …\n")
     try:
         from src.analyzer import run as analyze_run
         analyze_run(DB_PATH)
@@ -100,19 +97,29 @@ def cmd_scrape(args):
     print("\n Pipeline complete. Run 'stats' to see results.\n")
 
 
-
-
+# ── search ────────────────────────────────────────────────────────────────────
 def cmd_search(args):
-    """Accent-insensitive keyword search across title and body."""
-    term  = args.term
-    source = args.source
-    limit  = args.limit or 20
+    term      = args.term
+    source    = args.source
+    limit     = args.limit or 20
+    date_from = args.date_from
+    date_until= args.date_until
+    field     = args.field
+    grant_type= args.type
 
     conn = get_connection()
 
     try:
-        from src.analyzer import normalize_text, search_items
-        rows = search_items(conn, term, source=source, limit=limit)
+        from src.analyzer import search_items
+        rows = search_items(
+            conn, term,
+            source=source,
+            field=field,
+            grant_type=grant_type,
+            date_from=date_from,
+            date_until=date_until,
+            limit=limit,
+        )
     except ImportError:
         import unicodedata, re
         def normalize_text(t):
@@ -130,6 +137,7 @@ def cmd_search(args):
         rows = _rows_to_dicts(conn.execute(f"""
             SELECT id, source, title, date, url,
                    earliest_deadline, funding_amounts, emails,
+                   research_field, grant_type,
                    SUBSTR(body, 1, 200) AS excerpt
             FROM items
             WHERE (norm(normalized_text) LIKE ? OR norm(title) LIKE ?)
@@ -137,7 +145,7 @@ def cmd_search(args):
             ORDER BY date DESC LIMIT ?
         """, params).fetchall())
 
-    print(f"\n🔎  Search: '{term}'  ({len(rows)} result(s))\n")
+    print(f"\n Search: '{term}'  ({len(rows)} result(s))\n")
     if not rows:
         print("  No results found.")
         return
@@ -145,38 +153,38 @@ def cmd_search(args):
     for r in rows:
         amounts = r.get("funding_amounts") or "[]"
         try:
-            amounts_list = json.loads(amounts)
-            amounts_str = ", ".join(amounts_list) if amounts_list else "—"
+            amounts_str = ", ".join(json.loads(amounts)) or "—"
         except Exception:
             amounts_str = "—"
 
         emails = r.get("emails") or "[]"
         try:
-            emails_list = json.loads(emails)
-            emails_str = ", ".join(emails_list) if emails_list else "—"
+            emails_str = ", ".join(json.loads(emails)) or "—"
         except Exception:
             emails_str = "—"
 
         print(f"  [{r['source'].upper()}] #{r['id']}  {r['date'] or '—'}")
-        print(f"  Title   : {r['title'] or '—'}")
-        print(f"  Deadline: {r['earliest_deadline'] or '—'}")
-        print(f"  Amounts : {amounts_str}")
-        print(f"  Emails  : {emails_str}")
-        print(f"  URL     : {r['url'] or '—'}")
+        print(f"  Title    : {r['title'] or '—'}")
+        print(f"  Field    : {r.get('research_field') or '—'}  |  Type: {r.get('grant_type') or '—'}")
+        print(f"  Deadline : {r['earliest_deadline'] or '—'}")
+        print(f"  Amounts  : {amounts_str}")
+        print(f"  Emails   : {emails_str}")
+        print(f"  URL      : {r['url'] or '—'}")
         excerpt = (r.get("excerpt") or "").replace("\n", " ")
         if excerpt:
-            print(f"  Excerpt : {excerpt[:160]}…")
+            print(f"  Excerpt  : {excerpt[:160]}…")
         print()
 
     conn.close()
 
 
-
+# ── export ────────────────────────────────────────────────────────────────────
 def _all_items(conn: sqlite3.Connection) -> list[dict]:
     return _rows_to_dicts(conn.execute("""
         SELECT id, source, title, date, description, url,
                earliest_deadline, deadlines, funding_amounts,
-               emails, phone_numbers
+               emails, phone_numbers, attachments,
+               research_field, grant_type
         FROM items
         ORDER BY source, date DESC
     """).fetchall())
@@ -206,35 +214,35 @@ def export_json(rows: list[dict], output_dir: pathlib.Path) -> pathlib.Path:
 
 
 def cmd_export(args):
-    fmt    = (args.format or "both").lower()
-    out    = pathlib.Path(args.output) if args.output else EXPORT_DIR
+    fmt = (args.format or "both").lower()
+    out = pathlib.Path(args.output) if args.output else EXPORT_DIR
 
     conn = get_connection()
     rows = _all_items(conn)
     conn.close()
 
     print(f"\n Exporting {len(rows)} items …\n")
-
     if fmt in ("csv", "both"):
         p = export_csv(rows, out)
         print(f"   CSV  → {p}")
-
     if fmt in ("json", "both"):
         p = export_json(rows, out)
         print(f"   JSON → {p}")
-
     print()
 
 
+# ── stats ─────────────────────────────────────────────────────────────────────
 def cmd_stats(_args):
     conn = get_connection()
 
-    total       = conn.execute("SELECT COUNT(*) FROM items").fetchone()[0]
-    by_source   = conn.execute("SELECT source, COUNT(*) FROM items GROUP BY source").fetchall()
-    with_deadline = conn.execute("SELECT COUNT(*) FROM items WHERE earliest_deadline IS NOT NULL").fetchone()[0]
-    with_amount   = conn.execute("SELECT COUNT(*) FROM items WHERE funding_amounts IS NOT NULL AND funding_amounts != '[]'").fetchone()[0]
-    with_email    = conn.execute("SELECT COUNT(*) FROM items WHERE emails IS NOT NULL AND emails != '[]'").fetchone()[0]
-    with_phone    = conn.execute("SELECT COUNT(*) FROM items WHERE phone_numbers IS NOT NULL AND phone_numbers != '[]'").fetchone()[0]
+    total           = conn.execute("SELECT COUNT(*) FROM items").fetchone()[0]
+    by_source       = conn.execute("SELECT source, COUNT(*) FROM items GROUP BY source").fetchall()
+    with_deadline   = conn.execute("SELECT COUNT(*) FROM items WHERE earliest_deadline IS NOT NULL").fetchone()[0]
+    with_amount     = conn.execute("SELECT COUNT(*) FROM items WHERE funding_amounts IS NOT NULL AND funding_amounts != '[]'").fetchone()[0]
+    with_email      = conn.execute("SELECT COUNT(*) FROM items WHERE emails IS NOT NULL AND emails != '[]'").fetchone()[0]
+    with_phone      = conn.execute("SELECT COUNT(*) FROM items WHERE phone_numbers IS NOT NULL AND phone_numbers != '[]'").fetchone()[0]
+    by_field        = conn.execute("SELECT research_field, COUNT(*) FROM items WHERE research_field IS NOT NULL GROUP BY research_field ORDER BY 2 DESC").fetchall()
+    by_type         = conn.execute("SELECT grant_type, COUNT(*) FROM items WHERE grant_type IS NOT NULL GROUP BY grant_type ORDER BY 2 DESC").fetchall()
 
     upcoming = conn.execute("""
         SELECT id, source, title, earliest_deadline
@@ -252,19 +260,31 @@ def cmd_stats(_args):
         LIMIT 5
     """).fetchall()
 
-    print("\n" + "═" * 50)
+    print("\n" + "═" * 54)
     print("  DATABASE STATISTICS")
-    print("═" * 50)
+    print("═" * 54)
     print(f"  Total items     : {total}")
     for src, count in by_source:
-        print(f"    [{src.upper()}]          : {count}")
+        print(f"    [{src.upper():<3}]         : {count}")
     print(f"  With deadline   : {with_deadline}")
     print(f"  With amounts    : {with_amount}")
     print(f"  With email      : {with_email}")
     print(f"  With phone      : {with_phone}")
 
+    if by_field:
+        print("\n  BY RESEARCH FIELD")
+        print("  " + "─" * 50)
+        for f, count in by_field:
+            print(f"    {f:<30}  {count}")
+
+    if by_type:
+        print("\n  BY GRANT TYPE")
+        print("  " + "─" * 50)
+        for t, count in by_type:
+            print(f"    {t:<30}  {count}")
+
     print("\n  UPCOMING DEADLINES (next 5)")
-    print("  " + "─" * 46)
+    print("  " + "─" * 50)
     if upcoming:
         for row in upcoming:
             title = (row["title"] or "—")[:45]
@@ -273,7 +293,7 @@ def cmd_stats(_args):
         print("  No upcoming deadlines found.")
 
     print("\n  RECENT ITEMS WITH FUNDING")
-    print("  " + "─" * 46)
+    print("  " + "─" * 50)
     for row in top_amounts:
         title = (row["title"] or "—")[:35]
         try:
@@ -283,10 +303,11 @@ def cmd_stats(_args):
             amt_str = "—"
         print(f"  [{row['source'].upper()}]  {title:<35}  {amt_str}")
 
-    print("═" * 50 + "\n")
+    print("═" * 54 + "\n")
     conn.close()
 
 
+# ── CLI parser ────────────────────────────────────────────────────────────────
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cli.py",
@@ -296,6 +317,8 @@ def build_parser() -> argparse.ArgumentParser:
 Examples:
   python cli.py scrape --source ua
   python cli.py search bolsa --source ua --limit 10
+  python cli.py search doutoramento --from 2025-01-01 --until 2025-12-31
+  python cli.py search data --field "Informática e IA" --type "Bolsa Doutoral"
   python cli.py export --format json --output ./out
   python cli.py stats
         """,
@@ -304,23 +327,24 @@ Examples:
 
     # scrape
     p_scrape = sub.add_parser("scrape", help="Run the full scrape → parse → analyze pipeline")
-    p_scrape.add_argument("--source", choices=["ua", "anr", "all"], default="all",
-                          help="Which source to scrape (default: all)")
+    p_scrape.add_argument("--source", choices=["ua", "anr", "all"], default="all")
 
     # search
     p_search = sub.add_parser("search", help="Search grants by keyword")
     p_search.add_argument("term", help="Keyword(s) to search")
-    p_search.add_argument("--source", choices=["ua", "anr"], default=None,
-                          help="Filter by source")
-    p_search.add_argument("--limit", type=int, default=20,
-                          help="Max results (default: 20)")
+    p_search.add_argument("--source", choices=["ua", "anr"], default=None)
+    p_search.add_argument("--field",  default=None, help="Filter by research field")
+    p_search.add_argument("--type",   default=None, help="Filter by grant type")
+    p_search.add_argument("--from",   dest="date_from",  default=None, metavar="YYYY-MM-DD",
+                          help="Earliest deadline ≥ this date")
+    p_search.add_argument("--until",  dest="date_until", default=None, metavar="YYYY-MM-DD",
+                          help="Earliest deadline ≤ this date")
+    p_search.add_argument("--limit",  type=int, default=20)
 
     # export
     p_export = sub.add_parser("export", help="Export data to CSV and/or JSON")
-    p_export.add_argument("--format", choices=["csv", "json", "both"], default="both",
-                          help="Export format (default: both)")
-    p_export.add_argument("--output", default=None,
-                          help="Output directory (default: data/exports/)")
+    p_export.add_argument("--format", choices=["csv", "json", "both"], default="both")
+    p_export.add_argument("--output", default=None)
 
     # stats
     sub.add_parser("stats", help="Show database statistics")
@@ -331,7 +355,6 @@ Examples:
 def main():
     parser = build_parser()
     args = parser.parse_args()
-
     dispatch = {
         "scrape": cmd_scrape,
         "search": cmd_search,
