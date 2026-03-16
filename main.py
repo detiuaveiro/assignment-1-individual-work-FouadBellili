@@ -1,9 +1,16 @@
-def main():
-    from src.scraper import main as scrape_data
-    from src.parser import extract_data, store_data_in_db
-    from src.analyzer import analyze_news_data
+import sys
+sys.path.insert(0, "src")
 
-    scrape_data()
+from src.cli import build_parser
 
 if __name__ == "__main__":
-    main()
+    parser = build_parser()
+    args = parser.parse_args()
+
+    dispatch = {
+        "scrape": __import__("src.cli", fromlist=["cmd_scrape"]).cmd_scrape,
+        "search": __import__("src.cli", fromlist=["cmd_search"]).cmd_search,
+        "export": __import__("src.cli", fromlist=["cmd_export"]).cmd_export,
+        "stats":  __import__("src.cli", fromlist=["cmd_stats"]).cmd_stats,
+    }
+    dispatch[args.command](args)

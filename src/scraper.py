@@ -9,19 +9,30 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 BASE_DIR = pathlib.Path(__file__).parent.parent
 BRONZE_DIR = BASE_DIR / "data" / "bronze"
 
+MAX_RETRIES = 3
+RETRY_DELAY = 3
 
-def scrape_page(page: Page, url: str, file_path: pathlib.Path):
-    """Visit a URL and save its HTML."""
-    try:
-        page.goto(url, timeout=15000)
-        page.wait_for_load_state("networkidle")
-        time.sleep(1)
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(page.content())
-        logging.info(f"Saved: {url} → {file_path.name}")
-    except Exception as e:
-        logging.error(f"Error on {url}: {e}")
+
+def scrape_page(page: Page, url: str, file_path: pathlib.Path, retries: int = MAX_RETRIES):
+    """Visit a URL and save its HTML. Retries up to `retries` times on failure."""
+    for attempt in range(1, retries + 1):
+        try:
+            page.goto(url, timeout=15000)
+            page.wait_for_load_state("networkidle")
+            time.sleep(1)
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(page.content())
+            logging.info(f"Saved: {url} → {file_path.name}")
+            return
+        except Exception as e:
+            logging.warning(f"[Attempt {attempt}/{retries}] Error on {url}: {e}")
+            if attempt < retries:
+                logging.info(f"Retrying in {RETRY_DELAY}s …")
+                time.sleep(RETRY_DELAY)
+            else:
+                logging.error(f"Failed after {retries} attempts: {url}")
+
 
 
 def get_ua_article_links(page: Page) -> list[str]:
@@ -30,7 +41,7 @@ def get_ua_article_links(page: Page) -> list[str]:
         try:
             page.get_by_role("button", name="Carregar mais").click(timeout=5000)
             page.wait_for_load_state("networkidle")
-            time.sleep(5)
+            time.sleep(1)
         except Exception as e:
             logging.error(f"[UA] Error clicking 'Carregar mais': {e}")
             break
@@ -52,51 +63,71 @@ def scrape_ua(page: Page):
     try:
         page.goto("https://www.ua.pt/pt/noticias/3")
         page.wait_for_load_state("networkidle")
+        time.sleep(2)
     except Exception as e:
         logging.error(f"[UA] Failed to navigate to main page: {e}")
         return
 
     links = get_ua_article_links(page)
-
     for i, url in enumerate(links, start=1):
         scrape_page(page, url, articles_dir / f"article_{i:04d}.html")
 
     logging.info(f"[UA] {len(links)} articles saved to {articles_dir}")
 
 
-def get_insa_job_links(page: Page) -> list[str]:
-    """Collect all job offer links from the INSA listing page."""
+
+
+ANR_LISTING_URL = "https://anr.fr/fr/appels/"
+ANR_BASE        = "https://anr.fr"
+
+
+def get_anr_call_links(page: Page) -> list[str]:
+    """
+    Collect all call-for-proposals links from the ANR listing page.
+    ANR uses a simple static list — no JS pagination needed.
+    Article URLs follow the pattern /fr/detail/call/...
+    """
     links = page.eval_on_selector_all(
-        "a[href*='/insa-rouen-normandie/offres-demploi/']",
+        "a[href*='/fr/detail/call/'], a[href*='/fr/aapg']",
         """elements => [...new Set(
             elements
                 .map(el => el.href)
-                .filter(href => !href.endsWith('/offres-demploi/offre-emploi'))
+                .filter(href =>
+                    href.includes('anr.fr') &&
+                    !href.includes('#')
+                )
         )]"""
     )
-    logging.info(f"[INSA] Found {len(links)} job offer links")
+    logging.info(f"[ANR] Found {len(links)} call links")
     return links
 
 
-def scrape_insa(page: Page):
-    """Scrape all job offers from INSA Rouen."""
-    logging.info("Starting INSA Rouen scrape")
-    jobs_dir = BRONZE_DIR / "insa_jobs"
-    jobs_dir.mkdir(parents=True, exist_ok=True)
+def scrape_anr(page: Page):
+    """Scrape all open calls for proposals from ANR."""
+    logging.info("Starting ANR scrape")
+    anr_dir = BRONZE_DIR / "anr_appels"
+    anr_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        page.goto("https://www.insa-rouen.fr/insa-rouen-normandie/offres-demploi")
+        page.goto(ANR_LISTING_URL, timeout=20000)
         page.wait_for_load_state("networkidle")
+        time.sleep(2)
     except Exception as e:
-        logging.error(f"[INSA] Failed to navigate to job listing page: {e}")
+        logging.error(f"[ANR] Failed to navigate to listing page: {e}")
         return
 
-    links = get_insa_job_links(page)
+    links = get_anr_call_links(page)
+
+    if not links:
+        logging.warning("[ANR] No links found — saving listing page as fallback")
+        scrape_page(page, ANR_LISTING_URL, anr_dir / "listing_page.html")
+        return
 
     for i, url in enumerate(links, start=1):
-        scrape_page(page, url, jobs_dir / f"job_{i:04d}.html")
+        scrape_page(page, url, anr_dir / f"appel_{i:04d}.html")
 
-    logging.info(f"[INSA] {len(links)} job offers saved to {jobs_dir}")
+    logging.info(f"[ANR] {len(links)} calls saved to {anr_dir}")
+
 
 
 def main():
@@ -105,8 +136,11 @@ def main():
         page = browser.new_page()
 
         scrape_ua(page)
-        scrape_insa(page)
+        scrape_anr(page)
 
         browser.close()
         logging.info("All scraping complete.")
 
+
+if __name__ == "__main__":
+    main()
