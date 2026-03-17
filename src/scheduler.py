@@ -23,7 +23,6 @@ except ImportError:
     print("Missing dependency: pip install schedule", file=sys.stderr)
     sys.exit(1)
 
-# Make sure src/ is importable when run directly
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
 logging.basicConfig(
@@ -40,10 +39,11 @@ def run_pipeline(source: str = "all") -> None:
     """Execute the full scrape → parse → analyze pipeline."""
     logger.info(f"[Scheduler] Starting pipeline (source={source})")
 
-    # ── Scrape ──────────────────────────────────────────────────────────────
+    #Scrape
     try:
-        from src.scraper import scrape_ua, scrape_anr
         from playwright.sync_api import sync_playwright
+
+        from src.scraper import scrape_anr, scrape_ua
 
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
@@ -58,7 +58,7 @@ def run_pipeline(source: str = "all") -> None:
         logger.error(f"[Scheduler] Scraping failed: {e}")
         return
 
-    # ── Parse ────────────────────────────────────────────────────────────────
+    #Parse
     try:
         from src.parser import process
         process()
@@ -67,7 +67,7 @@ def run_pipeline(source: str = "all") -> None:
         logger.error(f"[Scheduler] Parsing failed: {e}")
         return
 
-    # ── Analyze ──────────────────────────────────────────────────────────────
+    #Analyze
     try:
         from src.analyzer import run as analyze_run
         analyze_run(DB_PATH)
@@ -107,7 +107,8 @@ def main() -> None:
         logger.error(e)
         sys.exit(1)
 
-    job = lambda: run_pipeline(args.source)
+    def job():
+        run_pipeline(args.source)
 
     if unit == "minutes":
         schedule.every(value).minutes.do(job)

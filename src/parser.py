@@ -1,9 +1,10 @@
 # src/parser.py
 
-from bs4 import BeautifulSoup
 import logging
 import pathlib
 import sqlite3
+
+from bs4 import BeautifulSoup
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -22,35 +23,34 @@ def _extract_attachments(soup: BeautifulSoup, base_url: str = "") -> list[str]:
     """Return a list of attachment URLs (PDFs, docs, etc.) found in the page."""
     links = []
     for a in soup.find_all("a", href=True):
-        href: str = a["href"]
-        # keep only links with a known document extension
+        href: str = str(a["href"])
         if any(href.lower().endswith(ext) for ext in _ATTACHMENT_EXTS):
-            # make absolute if needed
             if href.startswith("http"):
                 links.append(href)
             elif base_url:
                 links.append(base_url.rstrip("/") + "/" + href.lstrip("/"))
             else:
                 links.append(href)
-    return list(dict.fromkeys(links))  # deduplicate while preserving order
+    return list(dict.fromkeys(links))
 
 
 def _clean_text(text: str | None) -> str | None:
     """Remove excess whitespace and common HTML artefacts."""
     if not text:
         return None
-    import re, html
+    import html
+    import re
     text = html.unescape(text)
     text = re.sub(r"\s+", " ", text).strip()
     return text or None
 
 
 def extract_ua_article(file: pathlib.Path) -> dict | None:
-    with open(file, "r", encoding="utf-8") as f:
+    with open(file, encoding="utf-8") as f:
         soup = BeautifulSoup(f.read(), "html.parser")
 
     url_tag = soup.find("meta", attrs={"name": "url"})
-    url = url_tag.get("content") if url_tag else None
+    url = str(url_tag.get("content")) if url_tag else None
 
     title_tag = soup.find("p", class_="hIhIhv")
     title = _clean_text(title_tag.get_text(strip=True) if title_tag else None)
@@ -79,7 +79,7 @@ def extract_ua_article(file: pathlib.Path) -> dict | None:
 
 
 def extract_anr_call(file: pathlib.Path) -> dict | None:
-    with open(file, "r", encoding="utf-8") as f:
+    with open(file, encoding="utf-8") as f:
         soup = BeautifulSoup(f.read(), "html.parser")
 
     url_tag = soup.find("meta", property="og:url")
@@ -136,7 +136,6 @@ def init_db(conn: sqlite3.Connection):
             attachments TEXT
         )
     """)
-    # add attachments column to existing databases (idempotent)
     existing = {row[1] for row in conn.execute("PRAGMA table_info(items)")}
     if "attachments" not in existing:
         conn.execute("ALTER TABLE items ADD COLUMN attachments TEXT")

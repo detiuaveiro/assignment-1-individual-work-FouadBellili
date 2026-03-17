@@ -7,7 +7,6 @@ import re
 import sqlite3
 import unicodedata
 from datetime import date
-from typing import Optional
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -15,7 +14,7 @@ logger = logging.getLogger(__name__)
 BASE_DIR = pathlib.Path(__file__).parent.parent
 DB_PATH  = BASE_DIR / "data" / "silver" / "jobs_and_news.db"
 
-# ── Month names (PT / FR / EN) ────────────────────────────────────────────────
+#Month names (PT / FR / EN)
 MONTH_MAP = {
     "janeiro": 1, "fevereiro": 2, "marco": 3, "abril": 4, "maio": 5, "junho": 6,
     "julho": 7, "agosto": 8, "setembro": 9, "outubro": 10, "novembro": 11, "dezembro": 12,
@@ -27,7 +26,7 @@ MONTH_MAP = {
     "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
 }
 
-# ── Deadline extraction ───────────────────────────────────────────────────────
+#Deadline extraction
 DEADLINE_TRIGGERS = re.compile(
     r"prazo|candidaturas?\s+at[eé]|submiss[aã]o\s+at[eé]|data.limite|at[eé]\s+ao?\s+dia|"
     r"deadline|closing\s+date|clôture|date\s+limite|fin\s+de\s+dépôt|jusqu'au",
@@ -49,7 +48,7 @@ def normalize_text(text: str) -> str:
     return "".join(c for c in text if unicodedata.category(c) != "Mn")
 
 
-def _parse_date(match: re.Match, idx: int) -> Optional[date]:
+def _parse_date(match: re.Match, idx: int) -> date | None:
     try:
         if idx == 0:
             day, month_str, year = match.groups()
@@ -88,7 +87,7 @@ def extract_deadlines(text: str) -> list[date]:
     return sorted([d for d in found if d.year >= today.year - 1])
 
 
-# ── Funding amounts ───────────────────────────────────────────────────────────
+#Funding amounts
 def extract_funding_amounts(text: str) -> list[str]:
     patterns = [
         re.compile(r"\b\d{1,3}(?:[.\s]\d{3})*(?:,\d{1,2})?\s*(?:€|EUR|euros?)\b", re.IGNORECASE),
@@ -108,7 +107,7 @@ def extract_funding_amounts(text: str) -> list[str]:
     return amounts
 
 
-# ── Contact extraction ────────────────────────────────────────────────────────
+#Contact extraction
 def extract_emails(text: str) -> list[str]:
     pattern = re.compile(
         r"[a-zA-Z0-9._%+\-]+(?:\s*@\s*|\s*\(at\)\s*|\s*\[at\]\s*)[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}",
@@ -137,18 +136,18 @@ def extract_phone_numbers(text: str) -> list[str]:
     return list(set(phones))
 
 
-# ── Grant categorization ──────────────────────────────────────────────────────
+#Grant categorization
 # Each tuple: (research_field, grant_type, keyword_list)
 # For field rules: grant_type is ignored. For type rules: field = "Geral".
 CATEGORY_RULES: list[tuple[str, str, list[str]]] = [
-    # ── Research fields ──
+    #Research fields
     ("Ciências da Saúde",       "Investigação", ["saude", "medic", "clinico", "farmac", "biomedic", "cancer", "sante", "health", "medical"]),
     ("Engenharia e Tecnologia", "Investigação", ["engenharia", "eletrotecnia", "mecanica", "civil", "engineering", "tecnologia", "technology"]),
     ("Informática e IA",        "Investigação", ["computacao", "informatica", "inteligencia artificial", "machine learning", "ia", "ai", "software", "dados", "data"]),
     ("Ciências Naturais",       "Investigação", ["fisica", "quimica", "biologia", "geologia", "ambiente", "ecologia", "physics", "chemistry", "biology", "environment"]),
     ("Ciências Sociais",        "Investigação", ["sociologia", "psicologia", "economia", "gestao", "direito", "educacao", "social", "economics", "law"]),
     ("Humanidades",             "Investigação", ["historia", "filosofia", "letras", "linguistica", "artes", "cultura", "history", "philosophy", "humanities"]),
-    # ── Grant types (field = "Geral" means "type-only" rule) ──
+    #Grant types
     ("Geral", "Bolsa Doutoral",           ["bolsa de doutoramento", "phd grant", "these de doctorat", "doutoramento"]),
     ("Geral", "Bolsa Pós-Doutoral",       ["pos-doutoramento", "post-doc", "postdoc", "post doc"]),
     ("Geral", "Bolsa de Investigação",    ["bolsa de investigacao", "research grant", "bourse de recherche"]),
@@ -182,7 +181,7 @@ def categorize(title: str, description: str) -> tuple[str, str]:
     return field, grant_type
 
 
-# ── DB migration & analysis ───────────────────────────────────────────────────
+#DB migration & analysis
 METADATA_COLUMNS = {
     "earliest_deadline": "TEXT",
     "deadlines":         "TEXT",
@@ -261,15 +260,15 @@ def run(db_path: pathlib.Path = DB_PATH) -> None:
         logger.info(f"Analyzed {len(rows)} items.")
 
 
-# ── Search helper (used by cli.py) ────────────────────────────────────────────
+#Search helper
 def search_items(
     conn: sqlite3.Connection,
     term: str,
-    source: Optional[str] = None,
-    field: Optional[str] = None,
-    grant_type: Optional[str] = None,
-    date_from: Optional[str] = None,
-    date_until: Optional[str] = None,
+    source: str | None = None,
+    field: str | None = None,
+    grant_type: str | None = None,
+    date_from: str | None = None,
+    date_until: str | None = None,
     limit: int = 20,
 ) -> list[dict]:
     conn.create_function("norm", 1, normalize_text)

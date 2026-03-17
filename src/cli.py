@@ -58,14 +58,15 @@ def _print_table(rows: list[dict], columns: list[str], max_width: int = 40):
         print(line)
 
 
-# ── scrape ────────────────────────────────────────────────────────────────────
+#scrape
 def cmd_scrape(args):
     source = args.source.lower() if args.source else "all"
     print(f"\n Starting scrape (source={source}) …\n")
 
     try:
-        from src.scraper import scrape_ua, scrape_anr
         from playwright.sync_api import sync_playwright
+
+        from src.scraper import scrape_anr, scrape_ua
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             page = browser.new_page()
@@ -97,7 +98,7 @@ def cmd_scrape(args):
     print("\n Pipeline complete. Run 'stats' to see results.\n")
 
 
-# ── search ────────────────────────────────────────────────────────────────────
+#search
 def cmd_search(args):
     term      = args.term
     source    = args.source
@@ -121,7 +122,7 @@ def cmd_search(args):
             limit=limit,
         )
     except ImportError:
-        import unicodedata, re
+        import unicodedata
         def normalize_text(t):
             t = t.lower()
             t = unicodedata.normalize("NFD", t)
@@ -133,7 +134,7 @@ def cmd_search(args):
         if source:
             src_filter = "AND source = ?"
             params.append(source)
-        params.append(limit)
+        params.append(str(limit))
         rows = _rows_to_dicts(conn.execute(f"""
             SELECT id, source, title, date, url,
                    earliest_deadline, funding_amounts, emails,
@@ -178,7 +179,7 @@ def cmd_search(args):
     conn.close()
 
 
-# ── export ────────────────────────────────────────────────────────────────────
+#export
 def _all_items(conn: sqlite3.Connection) -> list[dict]:
     return _rows_to_dicts(conn.execute("""
         SELECT id, source, title, date, description, url,
@@ -231,7 +232,7 @@ def cmd_export(args):
     print()
 
 
-# ── stats ─────────────────────────────────────────────────────────────────────
+#stats
 def cmd_stats(_args):
     conn = get_connection()
 
@@ -307,7 +308,7 @@ def cmd_stats(_args):
     conn.close()
 
 
-# ── CLI parser ────────────────────────────────────────────────────────────────
+#CLI parser
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cli.py",
